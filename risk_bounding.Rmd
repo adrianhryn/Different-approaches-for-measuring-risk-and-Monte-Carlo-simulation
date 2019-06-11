@@ -1,0 +1,432 @@
+
+```{r}
+library(plotly)
+library(quantmod)
+library(dplyr)
+library(pracma)
+library(randtests)
+library(vrtest)
+library(ggplot2)
+```
+
+
+
+#Uncertainty is a big problem for investors, managers and other financial people. Some of them lose on it, some win, but all of them trying to make moves to increase their chances. One of the possibilities of doing better is to reduce risk (portfolios, for example), all other factors are equal, and it is especially important to know how to bound it. 
+
+
+#My main goal in this project is to see different ways of bounding the risk in terms of different changes in the prices of trading stocks. In this work, I interpret the risk as a standard deviation (almost all people, I guess, use the same approach). The biggest part of a work dedicates to manipulations with a Monte Carlo simulation.
+I took some datasets from Kaggle and Yahoo finance; they contain information about dates (trading days), open, high, low, close prices and the companies volume.
+
+```{r}
+amzn <- read.table("data/amzn.us.txt", header = TRUE, sep=",")
+googl <- read.table("data/googl.us.txt", header = TRUE, sep=",")
+nflx <- read.table("data/nflx.us.txt", header = TRUE, sep=",")
+fb <- read.table("data/fb.us.txt", header = TRUE, sep=",")
+aapl <- read.table("data/aapl.us.txt", header = TRUE, sep=",")
+
+```
+
+First of all, I plotted a graph of OHLC for Amazon. This company is the main character of this project. We see that Amazon did a great job at the period from the 2019 year.
+```{r}
+
+plot_ly(x = ~amzn$Date, type="ohlc",
+          open = ~amzn$Open, close = ~amzn$Close,
+          high = ~amzn$High, low = ~amzn$Low) %>%
+  layout(title = "OHLC for Amazon")
+
+```
+
+# Bollinger Bands
+
+Let's start with Bollinger Bands. It is a technique that is popular for traders. It can tell you when to expect large shifts (up or down). When you see that the dashed line is narrowed, you know that big volatility is coming. 
+
+Bollinger Bands consist of an exponential moving average and two standard deviations that are bounding shifts of prices.
+From the following graph, we see that Bollinger Bands are not very useful for Amazon, because its stocks are not very volatile. Let's consider Tesla!
+
+```{r}
+amzn <- read.csv("data/AMZN_data.csv")
+moving.average <- movavg(amzn$close, 20, type="e") 
+volatility.close <- sd(amzn$close)
+
+ggplot(amzn, aes(x=as.Date(amzn$date), y=amzn$close)) +
+  xlab("Date") + 
+  ylab("Close price") +
+  ggtitle("Bolinger bands for Amazon stocks") +
+
+  geom_line() + ylim(0, 1500) +
+  geom_line(aes(x=as.Date(amzn$date), y=moving.average + volatility.close), linetype="dashed", color = "red") +
+  geom_line(aes(x=as.Date(amzn$date), y=moving.average - volatility.close), linetype="dashed", color = "red")
+
+```
+```{r}
+tsla <- read.csv("data/TSLA.csv", header = TRUE)
+
+moving.average.tesla <- movavg(tsla$Close, 20, type="e") 
+
+volatility.tsla.close <- sd(tsla$Close)
+
+
+ggplot(tsla, aes(x=as.Date(tsla$Date), y=tsla$Close)) +
+  xlab("Date") + 
+  ylab("Close price") +
+  ggtitle("Bolinger bands for Tesla stocks", subtitle="Red vertical line shows a moment of to much narrowed bands, after which bigger volatility came.
+Narrowness of bands is an indicator of future volatility") +
+
+  geom_line() +
+  geom_line(aes(x=as.Date(tsla$Date), y=moving.average.tesla + volatility.tsla.close), linetype="dashed", color = "red") +
+  geom_line(aes(x=as.Date(tsla$Date), y=moving.average.tesla - volatility.tsla.close), linetype="dashed", color = "red") +
+  geom_vline(xintercept=as.Date("2017-03-29"), color="red")
+```
+
+#Let's consider one more examle - approximation for a whole market! For it I took a dataset with OHCL of S&P500
+```{r}
+sp500 <- read.csv("data/S&P500.csv", header = TRUE)
+moving.average.sp500 <- movavg(sp500$Close, 20, type="e") 
+
+volatility.sp500 <- sd(sp500$Close)
+
+
+ggplot(sp500, aes(x=as.Date(sp500$Date), y=sp500$Close)) +
+  xlab("Date") + 
+  ylab("Close price") +
+  ggtitle("Bolinger bands for S&P500", subtitle="We see much narrower bands in crisis time (vertical lines)") +
+
+  geom_line() +
+  geom_line(aes(x=as.Date(sp500$Date), y=moving.average.sp500 + volatility.sp500), linetype="dashed", color = "red") +
+  geom_line(aes(x=as.Date(sp500$Date), y=moving.average.sp500 - volatility.sp500), linetype="dashed", color = "red") + geom_vline(xintercept=as.Date("2009-01-01"), color="red") + geom_vline(xintercept=as.Date("2008-01-01"), color="red")
+```
+On the historical data the bands reflect nice, we see narrower lines (comparing to the previous period), but in 2008 it was a little problem to catch the difference with this instrument I suppose. For crysis like that one, we need much better indicators.
+
+In general, we don't see huge volatility. The reason for it is that we are dealing with a whole market, and it has much less risk that a single company (or a bunch of companies)
+
+By the way, we see a great recovering from a 2008 crisis
+
+
+
+# Bounds by 2 standard deviaton
+
+As we know, that there is an empirical rule that connects risk in terms of variance and a percentual part of a sample in one thing.
+The key assumption here is that a price distribution follows the normal distribution. For any company we can calculate the mean and standard deviation of previous prices, so we can bound it by two sd and say that in 95% the next price will be in this range. The crucial point of it is we should exclude some historical data such as crises because in such periods prices are very volatile, so they will cause our estimates to be inaccurate.
+
+
+#Why 2-standard deviation approach is not appropriate for price outliers detection?
+```{r}
+
+sp500.2010 <- sp500 %>% filter(as.Date(sp500$Date) < as.Date("2010-01-01"))
+sp500.2008 <- sp500 %>% filter(as.Date(sp500$Date) < as.Date("2008-01-01"))
+
+u.sp500.for.2008 <- mean(sp500.2008$Close)
+sd.sp500.for.2008 <- sd(sp500.2008$Close)
+
+low.sp500 <- mean(sp500.2008$Close) - 2*sd(sp500.2008$Close)
+high.sp500 <- mean(sp500.2008$Close) + 2*sd(sp500.2008$Close)
+
+ggplot(sp500.2010, aes(x=as.Date(sp500.2010$Date), y=sp500.2010$Close)) + geom_line() + 
+  xlab("Date") +
+  ylab("Close price") + ylim(400, 1600) +
+  ggtitle("CLose price of S&P500 and two standart deviations bound", subtitle="Do not use 2-sigma rule as your best estimation technique. 
+Even low-risk market standard deviation is not appropriate for outliers.
+Dashed lines are mean +- 2sd.") + 
+  geom_hline(yintercept=high.sp500, linetype="dashed") +
+  geom_hline(yintercept=low.sp500, linetype="dashed")  + 
+  geom_vline(xintercept=as.Date("2008-01-01"), color="red")
+
+```
+I tried to pick the most illustrative example. S&P500 prices contains much more information about market than every compnay in USA. And even its historical volatility contained a lack of information for predicting such shift in prices
+
+
+
+
+
+The next part of my work is mostly about random things. At first, let's see on the daily returns of top companies and test them for a Random Walk process. There is a big discussion if real prices are obtained by such a process in real life. Answer on this question is important for choosing techniques for modellings, predictions and other stuff
+
+# Test for random walks
+
+1. Calculation returns on daily closed price
+2. Using a variance ratio test, check if those returns can be obtained from the random walk model
+   H0: vector of returns follows a random walk model
+   H1: Another model
+
+```{r}
+amzn <- read.table("data/amzn.us.txt", header = TRUE, sep=",")
+Returns = exp(diff(log(amzn$Close))) - 1
+vrtest::Auto.Q(Returns)
+```
+P-value is 0.74; it means that we will be wrong in 74% of cases if we will reject the null hypothesis. So, we do not reject it.
+The main claim here is that Amazon daily returns follow the random walk process
+
+Let's consider one more test for a random walk. Again H0 is that a vector of returns follows the random walk model.
+```{r}
+
+model = lm(Returns~1)
+runs.test(model$residuals)
+```
+We received a p-value equal to 0,1999, so we fail to reject the null hypothesis under 5, 10, 15 confidence levels. So, we will treat daily returns on Amazon as members of a random walk process.
+
+Similarly, we go for another top companies with the same tests, let's see if they will show the similar thing
+
+```{r}
+
+print("Run tests for Facebook")
+
+returns.fb <- exp(diff(log(fb$Close))) - 1
+  
+vrtest::Auto.Q(returns.fb)
+  
+model <- lm(returns.fb~1)
+runs.test(model$residuals)
+
+print("Run tests for Apple")
+
+returns.appl <- exp(diff(log(aapl$Close))) - 1
+  
+vrtest::Auto.Q(returns.appl)
+  
+model <- lm(returns.appl~1)
+runs.test(model$residuals)
+
+print("Run tests for Netflix")
+
+returns.nflx <- exp(diff(log(nflx$Close))) - 1
+  
+vrtest::Auto.Q(returns.nflx)
+  
+model <- lm(returns.nflx~1)
+runs.test(model$residuals)
+
+print("Run tests for Google")
+  
+returns.googl <- exp(diff(log(googl$Close))) - 1
+  
+vrtest::Auto.Q(returns.googl)
+  
+model <- lm(returns.googl~1)
+runs.test(model$residuals)
+
+```
+
+All tests, except one, runs.test for Netflix, show us that top companies follow a random walk process.
+
+(!)The problem with such claim can be that if something follows the RW process on a daily(!) basis, it doesn't mean that it will follow this process on a weekly/monthly/yearly basis (!) 
+
+But nevertheless, I kind of proved (using statistical tests that are implemented in R libraries, of course) that some companies follow the RW process daily.
+
+#And the last two tests are special ones because I am going to test if the whole market follows the RW process daily
+
+
+```{r}
+returns.sp500 <- exp(diff(log(sp500$Close))) - 1
+  
+vrtest::Auto.Q(returns.sp500)
+  
+model <- lm(returns.sp500~1)
+runs.test(model$residuals)
+```
+We should reject the null hypothesis under 1% confidence level for each test.
+And it is the moment of a little confusion for me because I was expecting that tests return the same results as for each top company. But at the end of my project, I met the other one confusion, and I suppose that those two are connected.
+
+
+I am interested if we can do better then 2sd estimate, using the fact that our prices follow the RF model. I want to try to simulate some "random walks" (meaning: random changes in prices) to bound some risks. Investors often need such information as what is the minimal possible price in 20/50/n days from now. 
+I tried to answer those questions using Monte Carlo simulation. 
+
+
+#MONTE CARLO SIMULATION PART
+
+Structure:
+Three checks and the simulation below them
+
+I decided to simulate a few situations with Amazon stocks. So, I went to https://www.macrotrends.net/stocks/charts/AMZN/amazon/stock-price-history and chose some cases. I attached a very general picture "3 checks on Monte Carlo simulation" for a visualization of a given case. I tried to describe each of them in words, so I hope there won't be any confusions about the dates, prices and the other stuff. 
+
+First two cases weren't so rough, because they contain a few shifts. The last one is more interesting, so I broke it into several pieces: I tried to see how the simulation changes when we change the train set for an average return for a stock and its percentual volatility. And one more comment: I used several datasets because they contain different periods for Amazon, I should have to merge them, but I was a little bit out of time, and I didn't know how to do it correctly. So, let's start.
+
+
+#First check on Monte Carlo simulation
+
+- Take a date from all historical data to 31.10.2013 (185 observations). 
+- Calculate average expected return - the amount on which we will go up and expected percentual stock volatility
+- Take a starting price equal to the last day of a given period.
+
+n - numbers of days that we will simulate. After 180 there was a sort of "unexpected" decrease due to graph Amazon stock prices. 
+
+So, I want to check if this simulation can include this little "unexpected" shift.
+
+```{r}
+amzn <- read.csv("data/AMZN_data.csv", header=TRUE)
+
+amzn.1 <- amzn %>% filter(as.Date(amzn$date) < as.Date("2013-11-01"))
+amzn.1.plot <- amzn %>% filter(as.Date(amzn$date) < as.Date("2014-08-01"))
+  
+last.day.1 <- amzn.1 %>% filter(as.Date(amzn.1$date) == as.Date("2013-10-31"))
+last.day.1
+
+n.1 <- 250  # number of days to a decrease
+
+stock_mu.1 <- mean(exp(diff(log(amzn.1$close))) - 1)
+stock_sigma.1 <- sd(amzn.1$close) / mean(amzn.1$close)
+stock_price.1 <- last.day.1$close
+
+plot_ly(x = ~amzn.1.plot$date, type="ohlc",
+          open = ~amzn.1.plot$open, close = ~amzn.1.plot$close,
+          high = ~amzn.1.plot$high, low = ~amzn.1.plot$low) %>%
+  layout(title = "Simulation started at 2013-10-31 up to 2014-08-01 (9 months)")
+
+
+```
+The results for first check are: 
+
+10% quantile - 325.8308
+5% quantile - 316.2274
+1% quantile - 298.1402
+
+Due to the graph, the lowest price in this period was approximately 300. So the worst case scenario was not achieved, but only one percent quantile bounded it
+
+
+# Second check
+Second case, when I used a Monte Carlo simulation
+```{r}
+amzn <- read.csv("data/AMZN_data.csv")
+amzn.2 <- amzn %>% filter(as.Date(amzn$date) < as.Date("2015-07-30"))
+last.day.2 <- amzn.2 %>% filter(as.Date(amzn.2$date) == as.Date("2015-07-29"))
+last.day.2
+amzn.2.plot <- amzn %>% filter(as.Date(amzn$date) < as.Date("2016-03-20"))
+
+plot_ly(x = ~amzn.2.plot$date, type="ohlc",
+          open = ~amzn.2.plot$open, close = ~amzn.2.plot$close,
+          high = ~amzn.2.plot$high, low = ~amzn.2.plot$low) %>%
+  layout(title = " (Simulation started at 2015-07-29 up to 2016-02-25 (5 months)")
+
+n.2 <- 130   
+
+stock_mu.2 <- mean(exp(diff(log(amzn.2$close))) - 1)
+stock_sigma.2 <- sd(amzn.2$close) / mean(amzn.2$close)
+stock_price.2 <- last.day.2$close
+```
+The result are:
+10% quantile - 426.3757 
+5% quantile - 401.7373
+1% quantile - 356.3271
+
+The actual price was approximately 485.
+In this case, I think the most magnitude to the correct result gave a big bunch of observations (there was a long positive shift, so volatility expected to be much bigger). It seems to me that it is a bad choice of the previous period because estimated prices are far away from real prices. But nevertheless, the model bounded the price correctly
+
+
+# Third check
+1)
+At first, I tried to run the train set for eight years: from 04.01.2010 (4tf of January) - to 04.09.2018 (4th of September). From the pick in 04.09.2018 (4th of September) to 6.05.2019 (6th of May) there are 245 days and 17-12-19 is a date of the biggest fall. In this day, the price was 1377,45. So we want to predict if my simulation can catch such a decrease.
+
+It was very easy, my results were 205.2773 for 1% and  381.5740 for 5%. But for practical cases is also useless to take such a big period as a train set, because our average expected the return and expected percentual stock volatility would be so to say very widely estimated 
+
+2)
+So I decided to run a train set for only a year, half a year and three months
+```{r}
+amzn.3 <- read.csv("data/AMZN.2010.2018.csv", header=TRUE)    # I used this data for a third check 1) that I was explaining
+
+amzn.3.year <- amzn.3 %>% filter(as.Date(amzn.3$Date) > as.Date("2017-09-04"))
+amzn.3.halfayear <- amzn.3 %>% filter(as.Date(amzn.3$Date) > as.Date("2018-03-04"))
+amzn.3.3month <- amzn.3 %>% filter(as.Date(amzn.3$Date) > as.Date("2017-06-04"))
+last.day.3 <- amzn.3 %>% filter(as.Date(amzn.3$Date) == as.Date("2018-09-04"))
+
+n.3 <- 245   
+
+stock_mu.3.3month <- mean(exp(diff(log(amzn.3.3month$Close))) - 1)           #I was changing an argument due to appropriate dataset. 
+stock_sigma.3.3month <- sd(amzn.3.3month$Close) / mean(amzn.3.3month$Close)    #I was changing an argument due to appropriate dataset. 
+
+stock_price.3 <- last.day.3$Close
+
+
+```
+Comment: there is no plot for the last case because the dataset is bounded by 04-09-2018. So I just get real prices from the link above
+The biggest fall during this 245 days was 1377.45.
+
+Results from modelling Third check 2) are:
+
+if we train our return and volatility for one year:
+10% quantile - 1530.436
+5% quantile - 1423.938
+1% quantile - 1213.667
+
+We can see, that if we considered only 5% quantile, we would be wrong because the real price was lower by 46,5 points. But 1% quantile did a good job
+So, it seems maybe one year period is enough.
+
+
+if we train our return and volatility for a half a year: 
+10% quantile - 1804.014
+5% quantile - 1747.076
+1% quantile - 1626.050
+
+We can see, that choosing half a year for training our dataset was a very bad idea because at 17-12-19 we would lose 248.6$ per share. The reason could be that the last half a year to a 2018-09-04 wasn't so volatile, so average return and percentual volatility became relatively small
+
+
+I felt that it is a bad idea to continue with three months, but surprisingly for me I get:
+10% quantile- 1462.357
+5% quantile - 1346.68
+1% quantile - 1121.60
+
+It is interesting, but three month period did a better job than the one year model at 5% quantile. But I guess it (3-month period model) has a problem with 1% quantile because it is too far from the real price. Of course, it bounded the real price well, but the distance between them is very large, so if we are doing some optimisation stuff, the three months model can be not optimal, so it is better to use one year model, I guess.
+
+
+I used some approximation (with the number of days for simulation, for example). The problem is that in real life simulations it is very important to have the right inputs because people can lose real money.
+
+
+#Let's back to our example with S&P500 and 2008 crisis. Let's see, if we can predict the loss using Monte Carlo simulation. I trained data from the 2000 year
+
+```{r}
+
+ggplot(sp500.2010, aes(x=as.Date(sp500.2010$Date), y=sp500.2010$Close)) + geom_line() + 
+  xlab("Date") +
+  ylab("Close price") + ylim(400, 1600) +
+  ggtitle("CLose price of S&P500 and simulated loss", subtitle="Even our best guess 1003.404 is bitten by S&P500 stock price
+dashed lines indicates the staring/ending (start of 2008 and middle of 2009)
+date of simulation") + 
+  geom_hline(yintercept=1003.404, color="red")  +
+  geom_vline(xintercept=as.Date("2008-01-01"), color="blue", linetype="dashed")  +
+  geom_vline(xintercept=as.Date("2009-05-26"), color="blue", linetype="dashed")  
+
+last.day.price.2008.01.02<- 1447.160034
+n.sp500 <- 450   
+stock_price.sp500 <- last.day.price.2008.01.02
+sp500.mu.until.2008 <- mean(exp(diff(log(sp500.2008$Close))) - 1)           
+sp500.sigma.until.2008 <- sd(sp500.2008$Close) / mean(sp500.2008$Close)    
+
+```
+We received:
+  1%       5%      10% 
+1003.404 1106.563 1172.015 
+
+It is strange that 2sigma rule did a better job in bounding that Monte Carlo. Maybe, the problem in lack of dates for training a model or I fail to construct a good simulation (I tried to take a much bigger dataset - from 1990 year, but the result was nut much better). 
+
+The reason why I did choose to do Monte Carlo simulation is I was thinking that if stock returns follow Random Walk process, I can simulate it and obtain good boundings. But two test for RW returned very small p-value, so I rejected the null hypothesis under 1% confidence level. The point is, maybe, 2sd rule gave a better bounding then my simulation, because of nonrandomness of market price returns - 2008 crisis is not a very random event (as we know from its reasons), that's why such fall can not be simulated by random process.
+
+
+# Simulation
+Epsilon - random part of a simulation
+Stock price calculated as a quantile of a normal distribution
+```{r}
+
+stock_return <- function(stock_price, n, stock_mu, stock_sigma){
+  delta_t <- 1/n # one period
+  for (i in seq(n)){
+    epsilon <- runif(n=1, min=0, max=1) 
+    stock_price <- stock_price * (1 + qnorm(epsilon, 
+                                            stock_mu * delta_t, 
+                                            stock_sigma* sqrt(delta_t)))
+  }
+  return(stock_price)
+}
+
+simulations <- 10000 
+ 
+# Monte Carlo simulations
+set.seed(100) 
+stock_prices <- c()
+for (i in seq(simulations)){
+  stock_prices <- c(stock_prices,
+                    stock_return(stock_price=stock_price.sp500,         
+                                   n=n.sp500, 
+                                   stock_mu=sp500.mu.until.2008, 
+                                   stock_sigma=sp500.sigma.until.2008))
+}
+quantile(stock_prices, c(.01, .05, .1))
+```
+
+
